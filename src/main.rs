@@ -45,7 +45,29 @@ async fn main() {
         std::process::exit(-1);
     }
 
-    dbg!(&listings);
+    // dbg!(&listings);
+    for (i, listing) in listings.iter().enumerate() {
+        println!(
+            "{}: {} | {} | {} | {} pages | {} | {} | {}",
+            i,
+            listing
+                .title
+                .chars()
+                .filter(|c| c.is_alphabetic() || c == &' ')
+                .collect::<String>()
+                .trim(),
+            listing.authors,
+            listing.year_published,
+            (if &listing.pages == "" {
+                "N/A"
+            } else {
+                &listing.pages
+            }),
+            listing.language,
+            listing.extension,
+            listing.file_size
+        )
+    }
 }
 
 async fn find_hostname(client: &reqwest::Client) -> Result<String, &'static str> {
