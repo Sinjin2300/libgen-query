@@ -1,7 +1,9 @@
 use clap::Parser;
+use doc_listing::DocumentListing;
 use reqwest;
 use scraper::{Html, Selector};
 use serde_json;
+mod doc_listing;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -30,15 +32,21 @@ async fn main() {
         find_hostname(&client).await.unwrap(),
         format_url(&args).unwrap()
     );
-
+    println!("Querying: {}", url);
     let response = client.get(url).send().await.unwrap();
 
+    let listings: Vec<DocumentListing>;
     if response.status().is_success() {
-        let table: &String = &extract_tables(response.text().await.unwrap().as_str())[2];
-        extract_table_data(table.as_str());
+        let table_data = response.text().await.unwrap();
+        // dbg!(&table_data);
+        let table: &String = &extract_tables(table_data.as_str())[2];
+        listings = extract_table_data(table.as_str());
     } else {
-        println!("Could not Query")
+        println!("Could not Query");
+        std::process::exit(-1);
     }
+
+    dbg!(&listings);
 }
 
 async fn find_hostname(client: &reqwest::Client) -> Result<String, &'static str> {
@@ -72,9 +80,9 @@ async fn find_hostname(client: &reqwest::Client) -> Result<String, &'static str>
         Err("No Response")
     }
 }
-fn extract_table_data(raw_html: &str) {
+fn extract_table_data(raw_html: &str) -> Vec<DocumentListing> {
     let document = Html::parse_document(raw_html);
-
+    let mut output: Vec<DocumentListing> = Vec::new();
     // Select the table based on its attributes
     let table_selector = Selector::parse(
         "table[width=\"100%\"][cellspacing=\"1\"][cellpadding=\"1\"][rules=\"rows\"][class=\"c\"]",
@@ -89,19 +97,19 @@ fn extract_table_data(raw_html: &str) {
         // Iterate over the rows starting from the second one
         for row in rows.iter().skip(1) {
             // Process each row as needed
-            println!(
-                "Row content: {:?}",
+            output.push(DocumentListing::from(
                 row.text()
-                    .map(|x| x.replace("\n\t\t\t\t", " | "))
+                    .map(|x| x.replace("\n\t\t\t\t", "|"))
                     .collect::<String>()
                     .split_terminator('|')
                     .take(9)
-                    .collect::<Vec<&str>>()
-            );
+                    .collect::<Vec<&str>>(),
+            ));
         }
     } else {
         println!("Table not found");
     }
+    output
 }
 fn extract_tables(raw_html: &str) -> Vec<String> {
     let document = Html::parse_document(raw_html);
@@ -138,7 +146,7 @@ fn format_url(args: &Args) -> Result<String, &str> {
                 //Search with a title
                 Ok(format!(
                     "/search.php?req={}&open=0&res=100&view=simple&phrase=1&column=title",
-                    args.isbn.replace(" ", "+").as_str()
+                    args.title.replace(" ", "+").as_str()
                 ))
             }
         },
