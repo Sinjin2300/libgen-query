@@ -26,13 +26,12 @@ async fn main() {
 
     //Start a request
     let client = reqwest::Client::new();
+    let host = find_hostname(&client).await.unwrap();
 
-    let url: String = format!(
-        "{0}{1}",
-        find_hostname(&client).await.unwrap(),
-        format_url(&args).unwrap()
-    );
+    let url: String = format!("{0}{1}", host, format_url(&args).unwrap());
+
     println!("Querying: {}", url);
+
     let response = client.get(url).send().await.unwrap();
 
     let listings: Vec<DocumentListing>;
@@ -40,7 +39,7 @@ async fn main() {
         let table_data = response.text().await.unwrap();
         // dbg!(&table_data);
         let table: &String = &extract_tables(table_data.as_str())[2];
-        listings = extract_table_data(table.as_str());
+        listings = extract_table_data(table.as_str(), &host);
     } else {
         println!("Could not Query");
         std::process::exit(-1);
@@ -80,7 +79,8 @@ async fn find_hostname(client: &reqwest::Client) -> Result<String, &'static str>
         Err("No Response")
     }
 }
-fn extract_table_data(raw_html: &str) -> Vec<DocumentListing> {
+
+fn extract_table_data(raw_html: &str, host: &str) -> Vec<DocumentListing> {
     let document = Html::parse_document(raw_html);
     let mut output: Vec<DocumentListing> = Vec::new();
     // Select the table based on its attributes
@@ -97,20 +97,45 @@ fn extract_table_data(raw_html: &str) -> Vec<DocumentListing> {
         // Iterate over the rows starting from the second one
         for row in rows.iter().skip(1) {
             // Process each row as needed
-            output.push(DocumentListing::from(
-                row.text()
-                    .map(|x| x.replace("\n\t\t\t\t", "|"))
-                    .collect::<String>()
-                    .split_terminator('|')
-                    .take(9)
-                    .collect::<Vec<&str>>(),
+            let mut items: Vec<String> = row
+                .text()
+                .map(|x| x.replace("\n\t\t\t\t", "|"))
+                .collect::<String>()
+                .split_terminator('|')
+                .take(9)
+                .map(String::from)
+                .collect();
+
+            items.push(format!(
+                "{}/{}",
+                host,
+                find_link_by_id(raw_html, &items[0]).unwrap()
             ));
+            output.push(DocumentListing::from(&items));
         }
     } else {
         println!("Table not found");
     }
     output
 }
+
+fn find_link_by_id(html: &str, target_id: &str) -> Option<String> {
+    let document = Html::parse_document(html);
+
+    // Construct a CSS selector to select the link with the specified id
+    let selector_str = format!("a[id=\"{}\"]", target_id);
+    let link_selector = Selector::parse(&selector_str).unwrap();
+
+    // Find the link using the selector
+    if let Some(link) = document.select(&link_selector).next() {
+        // Get the value of the "href" attribute
+        let href_attribute = link.value().attr("href");
+        href_attribute.map(String::from)
+    } else {
+        None
+    }
+}
+
 fn extract_tables(raw_html: &str) -> Vec<String> {
     let document = Html::parse_document(raw_html);
 

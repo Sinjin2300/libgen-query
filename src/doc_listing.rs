@@ -9,26 +9,32 @@ pub struct DocumentListing {
     pub language: String,
     pub file_size: String,
     pub extension: String,
+    pub link: String,
 }
 
 impl DocumentListing {
-    pub fn from(data: Vec<&str>) -> Self {
-        if data.len() != 9 {
+    pub fn from(data: &Vec<String>) -> Self {
+        if data.len() != 10 {
             //Somehow wrong format
             DocumentListing::new()
         } else {
             //Fill in with data
             let mut doc = DocumentListing::new();
             let mut param_iter = data.iter();
-            doc.id = param_iter.next().unwrap_or(&"ERR").to_string();
-            doc.authors = param_iter.next().unwrap_or(&"ERR").to_string();
-            doc.title = param_iter.next().unwrap_or(&"ERR").to_string();
-            doc.publisher = param_iter.next().unwrap_or(&"ERR").to_string();
-            doc.year_published = param_iter.next().unwrap_or(&"1337").parse().unwrap_or(0);
-            doc.pages = param_iter.next().unwrap_or(&"ERR").to_string();
-            doc.language = param_iter.next().unwrap_or(&"ERR").to_string();
-            doc.file_size = param_iter.next().unwrap_or(&"ERR").to_string();
-            doc.extension = param_iter.next().unwrap_or(&"ERR").to_string();
+            doc.id = param_iter.next().unwrap_or(&"ERR".to_string()).to_string();
+            doc.authors = param_iter.next().unwrap_or(&"ERR".to_string()).to_string();
+            doc.title = param_iter.next().unwrap_or(&"ERR".to_string()).to_string();
+            doc.publisher = param_iter.next().unwrap_or(&"ERR".to_string()).to_string();
+            doc.year_published = param_iter
+                .next()
+                .unwrap_or(&"1337".to_string())
+                .parse()
+                .unwrap_or(0);
+            doc.pages = param_iter.next().unwrap_or(&"ERR".to_string()).to_string();
+            doc.language = param_iter.next().unwrap_or(&"ERR".to_string()).to_string();
+            doc.file_size = param_iter.next().unwrap_or(&"ERR".to_string()).to_string();
+            doc.extension = param_iter.next().unwrap_or(&"ERR".to_string()).to_string();
+            doc.link = param_iter.next().unwrap_or(&"ERR".to_string()).to_string();
 
             doc
         }
@@ -45,6 +51,7 @@ impl DocumentListing {
             language: ("".to_owned()),
             file_size: ("".to_owned()),
             extension: ("".to_owned()),
+            link: ("".to_owned()),
         }
     }
 }
