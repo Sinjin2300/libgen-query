@@ -34,8 +34,8 @@ async fn main() {
     let response = client.get(url).send().await.unwrap();
 
     if response.status().is_success() {
-        let tables: Vec<String> = extract_tables(response.text().await.unwrap().as_str());
-        dbg!(&tables[2]);
+        let table: &String = &extract_tables(response.text().await.unwrap().as_str())[2];
+        extract_table_data(table.as_str());
     } else {
         println!("Could not Query")
     }
@@ -72,7 +72,37 @@ async fn find_hostname(client: &reqwest::Client) -> Result<String, &'static str>
         Err("No Response")
     }
 }
+fn extract_table_data(raw_html: &str) {
+    let document = Html::parse_document(raw_html);
 
+    // Select the table based on its attributes
+    let table_selector = Selector::parse(
+        "table[width=\"100%\"][cellspacing=\"1\"][cellpadding=\"1\"][rules=\"rows\"][class=\"c\"]",
+    )
+    .unwrap();
+
+    // Check if the table exists
+    if let Some(table) = document.select(&table_selector).next() {
+        // Collect rows into a Vec before iterating
+        let rows: Vec<_> = table.select(&Selector::parse("tr").unwrap()).collect();
+
+        // Iterate over the rows starting from the second one
+        for row in rows.iter().skip(1) {
+            // Process each row as needed
+            println!(
+                "Row content: {:?}",
+                row.text()
+                    .map(|x| x.replace("\n\t\t\t\t", " | "))
+                    .collect::<String>()
+                    .split_terminator('|')
+                    .take(9)
+                    .collect::<Vec<&str>>()
+            );
+        }
+    } else {
+        println!("Table not found");
+    }
+}
 fn extract_tables(raw_html: &str) -> Vec<String> {
     let document = Html::parse_document(raw_html);
 
