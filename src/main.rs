@@ -3,26 +3,58 @@ use doc_listing::DocumentListing;
 use reqwest;
 use scraper::{Html, Selector};
 use serde_json;
+use inquire::{Select, Text};
+
 mod doc_listing;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short = 'I', long = "ISBN", requires = "directory", required = false, default_value_t = String::new())]
+    /// whether to use interactive search
+    #[arg(short = 'q', long = "quick", required = false, default_value_t = false)]
+    quick: bool,
+    
+    /// search by isbn
+    #[arg(short = 'I', long = "ISBN", required = false, default_value_t = String::new())]
     isbn: String,
 
-    #[arg(required = false, short = 't', long, requires = "directory", default_value_t = String::new())]
+    /// search by title
+    #[arg(short = 't', long, required = false, default_value_t = String::new())]
     title: String,
 
-    #[arg(short = 'o', long = "out")]
-    directory: String,
+    /// index of option to download from search info
+    #[arg(short = 'c', long = "choice", required = false, requires = "output", default_value_t = -1)]
+    choice: i32,
+
+    /// filepath or directory to put downloaded document
+    #[arg(short = 'o', long = "output")]
+    output: String,
 }
 
 #[tokio::main]
 async fn main() {
     //Read the input args
-    let args = Args::parse();
+    let mut args = Args::parse();
     dbg!(&args);
+
+    if args.quick{
+        // choose isbn or title search
+        let search_options = vec!["ISBN", "Title"];
+        let result = Select::new("How would you like to search?", search_options).prompt().unwrap();
+
+        match result{
+            "ISBN" => {
+                let isbn = Text::new("What ISBN would you like to find?").prompt().unwrap();
+                println!("Valid isbn, searching...");
+                args.isbn = isbn;
+            },
+            _ => {
+                let title = Text::new("What title would you like to find?").prompt().unwrap();
+                println!("Valid title, searching...");
+                args.title = title;
+            }
+        }
+    }
 
     //Start a request
     let client = reqwest::Client::new();
@@ -44,11 +76,27 @@ async fn main() {
         println!("Could not Query");
         std::process::exit(-1);
     }
-
-    // dbg!(&listings);
-    for (i, listing) in listings.iter().enumerate() {
-        println!("{}: {}", i, listing);
+    
+    // if no choice, just print options
+    let link: String;
+    if args.choice == -1 && !args.quick{
+        for (i, listing) in listings.iter().enumerate() {
+            println!("{}: {}", i, listing);
+        }
+        return;
     }
+    else if args.quick{
+        link = Select::new("Which document would you like?", listings).prompt().unwrap().link;
+    }
+    else {
+        link = listings[args.choice as usize].link.to_owned();
+    }
+
+    // TODO:
+    // use link to make another request, then output it to chosen directory with default file name
+    // or chosen file name, or make interactive file choice if using -q flag
+
+    
 }
 
 async fn find_hostname(client: &reqwest::Client) -> Result<String, &'static str> {
