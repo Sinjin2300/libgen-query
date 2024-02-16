@@ -27,7 +27,7 @@ struct Args {
     choice: i32,
 
     /// filepath or directory to put downloaded document
-    #[arg(short = 'o', long = "output")]
+    #[arg(short = 'o', long = "output", required = false, default_value_t = String::new())]
     output: String,
 }
 
