@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use clap::Parser;
 use doc_listing::DocumentListing;
 use reqwest;
@@ -14,22 +15,145 @@ struct Args {
     #[arg(short = 'q', long = "quick", required = false, default_value_t = false)]
     quick: bool,
     
-    /// search by isbn
-    #[arg(short = 'I', long = "ISBN", required = false, default_value_t = String::new())]
+    /// isbn search query
+    #[arg(short = 'i', long = "isbn", required = false, default_value_t = String::new())]
     isbn: String,
 
-    /// search by title
-    #[arg(short = 't', long, required = false, default_value_t = String::new())]
+    /// title search query
+    #[arg(short = 't', long = "title", required = false, default_value_t = String::new())]
     title: String,
 
-    /// index of option to download from search info
+    /// index of query result to download (starting at 0)
     #[arg(short = 'c', long = "choice", required = false, requires = "output", default_value_t = -1)]
     choice: i32,
 
     /// filepath or directory to put downloaded document
     #[arg(short = 'o', long = "output", required = false, default_value_t = String::new())]
     output: String,
+
+    /// number of query results to show (a high number may result in slow load time)
+    #[arg(short = 'n', long = "num-results", required = false, default_value_t = 30)]
+    num_results: u32,
+
+    /// whether to overwrite the file at the specified output if there is one
+    #[arg(short = 'w', long = "overwrite", required = false, default_value_t = false)]
+    overwrite: bool
 }
+
+enum SearchQuery{
+    ISBN(String),
+    TITLE(String),
+}
+
+struct CLIOptions{
+    query: SearchQuery,
+    choice: usize,
+    output: PathBuf,
+    num_results: u32,
+}
+
+impl CLIOptions{
+    fn new(args: Args) -> Result<CLIOptions, String>{
+        // bad input checking
+        if args.quick{
+            return Err("Cannot create CLIOptions as user selected quick mode.".into());
+        }
+        if args.isbn.is_empty() && args.title.is_empty(){
+            return Err("Please enter either an ISBN or title query with the -i (--isbn) or -t (--title) flags.".into());
+        }
+        if !args.isbn.is_empty() && !args.title.is_empty(){
+            return Err("Please only specify either an ISBN with the -i (--isbn) flag or a title with the -t (--title) flag, not both".into());
+        }
+        if args.output.is_empty(){
+            return Err("Please specify an output file path with the -o (--output) flag.".into());
+        }
+        if args.num_results == 0{
+            return Err("Please specify a number of search results greater than 0 with the -n (--num-results) flag.".into());
+        }
+
+        // warnings
+        if args.choice == -1{
+            println!("WARNING: As the -c (--choice) flag was not selected, the first search result will be chosen (equivalent to \"-c 0\")");
+        }
+
+        // file path checking
+        let opt_path = handle_output_path(&args)?;        
+        let buf = opt_path.ok_or("Please specify an ouput file path with -o (--output) or use quick mode with -q (--quick)")?;
+        
+
+        // return parsed ok result
+        Ok(CLIOptions{
+            query: if args.isbn.is_empty() {SearchQuery::TITLE(args.title)} else {SearchQuery::ISBN(args.isbn)},
+            choice: if args.choice == -1 {0} else {args.choice as usize},
+            output: buf,
+            num_results: args.num_results
+        })
+    }
+}
+
+struct QuickOptions {
+    query: Option<SearchQuery>,
+    choice: Option<usize>,
+    output: Option<PathBuf>,
+    num_results: u32
+}
+
+impl QuickOptions{
+    fn new (args: Args) -> Result<QuickOptions, String>{
+        if !args.quick{
+            return Err("Cannot create QuickOptions as user did not select quick mode.".into());
+        }
+        if !args.isbn.is_empty() && !args.title.is_empty(){
+            return Err("Please only specify either an ISBN with the -i (--isbn) flag or a title with the -t (--title) flag, not both".into());
+        }
+        if args.num_results == 0{
+            return Err("Please specify a number of search results greater than 0 with the -n (--num-results) flag.".into());
+        }
+
+        // parsing and validating the output path
+
+        // file path checking and error propagation
+        let opt_path = handle_output_path(&args)?;
+
+        Ok(QuickOptions{
+            query: if args.isbn.is_empty() && args.title.is_empty() {
+                None
+            }
+            else if !args.title.is_empty() {
+                Some(SearchQuery::TITLE(args.title))
+            }
+            else {
+                Some(SearchQuery::ISBN(args.isbn))
+            },
+            choice: if args.choice == -1 {None} else {Some(args.choice as usize)},
+            output: opt_path,
+            num_results: args.num_results
+        })
+    }
+}
+
+fn handle_output_path(args: &Args) -> Result<Option<PathBuf>, String>{
+    Ok(if args.output.is_empty() {None} else {
+        let path = Path::new(args.output.as_str());
+        if path.exists() && !args.overwrite{
+            return Err("The specified output file path already exists. If you would like to overwrite it, specify the -w (--overwrite) flag (WARNING: THIS WILL OVERWRITE EXISTING FILES)".into());
+        }
+        let buf_res = path.canonicalize();
+        let buf;
+    
+        match buf_res{
+            Err(err) => {
+                return Err(format!("System error found trying to parse output file path: {}", err));
+            },
+            Ok(val) => {
+                buf = val;
+            }
+        }
+        Some(buf)
+    })
+}
+
+
 
 #[tokio::main]
 async fn main() {
