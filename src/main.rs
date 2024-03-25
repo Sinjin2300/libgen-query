@@ -24,7 +24,7 @@ struct Args {
     title: String,
 
     /// index of query result to download (starting at 0)
-    #[arg(short = 'c', long = "choice", required = false, requires = "output", default_value_t = -1)]
+    #[arg(short = 'c', long = "choice", required = false, default_value_t = -1)]
     choice: i32,
 
     /// filepath or directory to put downloaded document
@@ -34,20 +34,18 @@ struct Args {
     /// number of query results to show (a high number may result in slow load time)
     #[arg(short = 'n', long = "num-results", required = false, default_value_t = 30)]
     num_results: u32,
-
-    /// whether to overwrite the file at the specified output if there is one
-    #[arg(short = 'w', long = "overwrite", required = false, default_value_t = false)]
-    overwrite: bool
 }
 
+#[derive(Clone, Debug)]
 enum SearchQuery{
     ISBN(String),
     TITLE(String),
 }
 
+#[derive(Debug)]
 struct CLIOptions{
     query: SearchQuery,
-    choice: usize,
+    choice: Option<usize>,
     output: PathBuf,
     num_results: u32,
 }
@@ -65,15 +63,15 @@ impl CLIOptions{
             return Err("Please only specify either an ISBN with the -i (--isbn) flag or a title with the -t (--title) flag, not both".into());
         }
         if args.output.is_empty(){
-            return Err("Please specify an output file path with the -o (--output) flag.".into());
+            return Err("Please specify an output folder path with the -o (--output) flag.".into());
         }
         if args.num_results == 0{
             return Err("Please specify a number of search results greater than 0 with the -n (--num-results) flag.".into());
         }
 
-        // warnings
+        // warnings and notifications
         if args.choice == -1{
-            println!("WARNING: As the -c (--choice) flag was not selected, the first search result will be chosen (equivalent to \"-c 0\")");
+            println!("No choice selected, listing query results. If you would like to choose one of these results, run the same command with the -c (--choice) option and the index of the option you'd like.");
         }
 
         // file path checking
@@ -84,13 +82,14 @@ impl CLIOptions{
         // return parsed ok result
         Ok(CLIOptions{
             query: if args.isbn.is_empty() {SearchQuery::TITLE(args.title)} else {SearchQuery::ISBN(args.isbn)},
-            choice: if args.choice == -1 {0} else {args.choice as usize},
+            choice: if args.choice == -1 {None} else {Some(args.choice as usize)},
             output: buf,
             num_results: args.num_results
         })
     }
 }
 
+#[derive(Debug)]
 struct QuickOptions {
     query: Option<SearchQuery>,
     choice: Option<usize>,
@@ -135,92 +134,128 @@ impl QuickOptions{
 fn handle_output_path(args: &Args) -> Result<Option<PathBuf>, String>{
     Ok(if args.output.is_empty() {None} else {
         let path = Path::new(args.output.as_str());
-        if path.exists() && !args.overwrite{
-            return Err("The specified output file path already exists. If you would like to overwrite it, specify the -w (--overwrite) flag (WARNING: THIS WILL OVERWRITE EXISTING FILES)".into());
-        }
         let buf_res = path.canonicalize();
         let buf;
     
         match buf_res{
             Err(err) => {
-                return Err(format!("System error found trying to parse output file path: {}", err));
+                return Err(format!("System error found trying to parse output folder path: {}", err));
             },
             Ok(val) => {
                 buf = val;
             }
         }
+        if !buf.is_dir(){
+            return Err("Please specify a folder with the -o (--output) flag. Your file will be downloaded into that folder.".into());
+        }
         Some(buf)
     })
+}
+
+#[derive(Debug)]
+enum Options{
+    QUICK(QuickOptions),
+    CLI(CLIOptions)
 }
 
 
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), String>{
     //Read the input args
-    let mut args = Args::parse();
-    dbg!(&args);
+    let args = Args::parse();
+    //dbg!(&args);
 
-    if args.quick{
-        // choose isbn or title search
-        let search_options = vec!["ISBN", "Title"];
-        let result = Select::new("How would you like to search?", search_options).prompt().unwrap();
 
-        match result{
-            "ISBN" => {
-                let isbn = Text::new("What ISBN would you like to find?").prompt().unwrap();
-                println!("Valid isbn, searching...");
-                args.isbn = isbn;
-            },
-            _ => {
-                let title = Text::new("What title would you like to find?").prompt().unwrap();
-                println!("Valid title, searching...");
-                args.title = title;
+    // unwrap is fine here as we want these errors reported to the user
+    let options = if args.quick{
+        Options::QUICK(QuickOptions::new(args)?)
+    }
+    else{
+        Options::CLI(CLIOptions::new(args)?)
+    };
+    
+    //dbg!(&options);
+    // unpack or request query
+    let query = match &options{
+        Options::CLI(o) => o.query.clone(),
+        Options::QUICK(o) => match &o.query{
+            Some(s) => s.clone(),
+            None => {
+                // choose isbn or title search
+                let search_options = vec!["ISBN", "Title"];
+                let result = Select::new("How would you like to search?", search_options).prompt().unwrap();
+    
+                match result{
+                    "ISBN" => {
+                        let isbn = Text::new("What ISBN would you like to find?").prompt().unwrap();
+                        println!("Valid isbn, searching...");
+                        SearchQuery::ISBN(isbn)
+                    },
+                    _ => {
+                        let title = Text::new("What title would you like to find?").prompt().unwrap();
+                        println!("Valid title, searching...");
+                        SearchQuery::TITLE(title)
+                    }
+                }    
             }
         }
-    }
+    };
+    
 
     //Start a request
     let client = reqwest::Client::new();
     let host = find_hostname(&client).await.unwrap();
 
-    let url: String = format!("{0}{1}", host, format_url(&args).unwrap());
+    let url: String = format!("{0}{1}", host, format_url(&query).unwrap());
 
     println!("Querying: {}", url);
 
     let response = client.get(url).send().await.unwrap();
+    let num_results = match &options{
+        Options::CLI(o) => o.num_results,
+        Options::QUICK(o) => o.num_results,
+    };
 
-    let listings: Vec<DocumentListing>;
-    if response.status().is_success() {
-        let table_data = response.text().await.unwrap();
-        // dbg!(&table_data);
-        let table: &String = &extract_tables(table_data.as_str())[2];
-        listings = extract_table_data(table.as_str(), &host);
-    } else {
-        println!("Could not Query");
-        std::process::exit(-1);
-    }
-    
-    // if no choice, just print options
-    let link: String;
-    if args.choice == -1 && !args.quick{
-        for (i, listing) in listings.iter().enumerate() {
-            println!("{}: {}", i, listing);
-        }
-        return;
-    }
-    else if args.quick{
-        link = Select::new("Which document would you like?", listings).prompt().unwrap().link;
-    }
+    let listings: Vec<DocumentListing> = if response.status().is_success() {
+            let table_data = response.text().await.unwrap();
+            // dbg!(&table_data);
+            let table: &String = &extract_tables(table_data.as_str())[2];
+            extract_table_data(table.as_str(), &host, num_results)
+    } 
     else {
-        link = listings[args.choice as usize].link.to_owned();
-    }
+        return Err("libgen request failed.".to_string());
+    };
+    
+    
+    let link = match options{
+        Options::CLI(o) => {
+            match o.choice{
+                Some(c) => listings[c].link.to_owned(),
+                None => {
+                    // show listings and exit early if no choice specified
+                    for (i, listing) in listings.iter().enumerate() {
+                        println!("{}: {}", i, listing);
+                    }
+                    return Ok(())
+                }
+            }
+        },
+        Options::QUICK(o) => {
+            match o.choice{
+                Some(c) => listings[c].link.to_owned(),
+                None => Select::new("Which document would you like?", listings).prompt().unwrap().link
+            }
+        }
+    };
 
     // TODO:
     // use link to make another request, then output it to chosen directory with default file name
     // or chosen file name, or make interactive file choice if using -q flag
 
-    
+    println!("DEBUG: Successfully chose document at link: {}", link);
+
+    Ok(())
 }
 
 async fn find_hostname(client: &reqwest::Client) -> Result<String, &'static str> {
@@ -255,7 +290,7 @@ async fn find_hostname(client: &reqwest::Client) -> Result<String, &'static str>
     }
 }
 
-fn extract_table_data(raw_html: &str, host: &str) -> Vec<DocumentListing> {
+fn extract_table_data(raw_html: &str, host: &str, num_results: u32) -> Vec<DocumentListing> {
     let document = Html::parse_document(raw_html);
     let mut output: Vec<DocumentListing> = Vec::new();
     // Select the table based on its attributes
@@ -270,7 +305,8 @@ fn extract_table_data(raw_html: &str, host: &str) -> Vec<DocumentListing> {
         let rows: Vec<_> = table.select(&Selector::parse("tr").unwrap()).collect();
 
         // Iterate over the rows starting from the second one
-        for row in rows.iter().skip(1) {
+        for (i, row) in rows.iter().skip(1).enumerate() {
+            if i >= num_results as usize {break;}
             // Process each row as needed
             let mut items: Vec<String> = row
                 .text()
@@ -338,24 +374,30 @@ async fn test_connection(url: String, client: &reqwest::Client) -> Result<String
     }
 }
 
-fn format_url(args: &Args) -> Result<String, &str> {
-    match args.isbn.as_str() {
-        "" => match args.title.as_str() {
-            "" => Err("No Search Parameters"),
-            _ => {
-                //Search with a title
-                Ok(format!(
-                    "/search.php?req={}&open=0&res=100&view=simple&phrase=1&column=title",
-                    args.title.replace(" ", "+").as_str()
-                ))
+fn format_url(query: &SearchQuery) -> Result<String, &'static str> {
+    match query{
+        SearchQuery::ISBN(isbn) => {
+            match isbn.as_str(){
+                "" => Err("Please enter a non-empty ISBN"),
+                _ => {
+                    Ok(format!(
+                        "/search.php?req={}&open=0&res=100&view=simple&phrase=1&column=identifier",
+                        isbn
+                    ))
+                }
             }
         },
-        _ => {
-            //Search with an ISBN
-            Ok(format!(
-                "/search.php?req={}&open=0&res=100&view=simple&phrase=1&column=identifier",
-                args.isbn.as_str()
-            ))
+        SearchQuery::TITLE(title) => {
+            match title.as_str(){
+                "" => Err("Please enter a non-empty title"),
+                _ => {
+                    Ok(format!(
+                        "/search.php?req={}&open=0&res=100&view=simple&phrase=1&column=title",
+                        title.replace(" ", "+").as_str()
+                    ))
+                }
+            }
+            
         }
     }
 }
